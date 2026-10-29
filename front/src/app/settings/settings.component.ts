@@ -1790,6 +1790,15 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
                     </div>
                   }
                   
+                  <div class="form-group checkbox-row" data-testid="qr-auto-open-setting">
+                    <label class="switch">
+                      <input type="checkbox" [(ngModel)]="formData.qr_auto_open" name="qr_auto_open">
+                      <span class="slider round"></span>
+                    </label>
+                    <div><label class="check-label">{{ 'QR_ORDERING.AUTO_OPEN' | translate }}</label>
+                      <p class="hint">{{ 'QR_ORDERING.AUTO_OPEN_HINT' | translate }}</p></div>
+                  </div>
+
                   <div class="form-group checkbox-row">
                     <label class="switch">
                       <input type="checkbox" [(ngModel)]="formData.immediate_payment_required" name="immediate_payment_required">
@@ -3694,6 +3703,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     stripe_publishable_key: null,
     revolut_merchant_secret: null,
     immediate_payment_required: false,
+    qr_auto_open: false,
     timezone: null,
     country_code: null,
     smtp_host: null,
@@ -3945,6 +3955,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
           stripe_publishable_key: settings.stripe_publishable_key || null,
           revolut_merchant_secret: null,
           immediate_payment_required: settings.immediate_payment_required || false,
+          qr_auto_open: settings.qr_auto_open === true,
           timezone: settings.timezone || null,
           country_code: settings.country_code ?? null,
           smtp_host: settings.smtp_host ?? null,

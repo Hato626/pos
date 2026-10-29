@@ -152,7 +152,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                     <th>{{ 'TABLES.FLOOR' | translate }}</th>
                     <th>{{ 'TABLES.SEATS' | translate }}</th>
                     <th>{{ 'TABLES.COL_STATUS' | translate }}</th>
-                    <th>{{ 'TABLES.PIN' | translate }}</th>
+                    @if (!tenantSettings()?.qr_auto_open) { <th>{{ 'TABLES.PIN' | translate }}</th> }
                     <th>{{ 'TABLES.ASSIGNED_WAITER' | translate }}</th>
                     <th class="th-actions">{{ 'COMMON.ACTIONS' | translate }}</th>
                   </tr>
@@ -185,7 +185,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                             <span class="status-badge status-inactive status-inline"><span class="status-dot"></span>{{ 'TABLES.INACTIVE' | translate }}</span>
                           }
                         </td>
-                        <td class="pin-cell">—</td>
+                        @if (!tenantSettings()?.qr_auto_open) { <td class="pin-cell">—</td> }
                         <td>—</td>
                         <td class="td-actions">
                           <button type="button" class="btn btn-ghost btn-sm" (click)="toggleListGroupExpand(row.groupId); $event.stopPropagation()">
@@ -241,7 +241,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                       <span class="status-badge status-inactive status-inline"><span class="status-dot"></span>{{ 'TABLES.INACTIVE' | translate }}</span>
                     }
                   </td>
-                  <td class="pin-cell">{{ table.order_pin ?? '—' }}</td>
+                  @if (!tenantSettings()?.qr_auto_open) { <td class="pin-cell">{{ table.order_pin ?? '—' }}</td> }
                   <td>
                     @if (canManageTableAssignments()) {
                       <select class="waiter-select-inline" (change)="onWaiterAssign(table, $event)">
@@ -272,7 +272,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                     } @else {
                       <button type="button" class="icon-btn icon-btn-edit" (click)="startEdit(table)" [title]="'COMMON.EDIT' | translate">✎</button>
                       @if (table.is_active) {
-                        <button type="button" class="btn btn-sm btn-ghost" (click)="regeneratePin(table)" [disabled]="activatingTableId() === table.id" [title]="'TABLES.NEW_PIN' | translate">↻</button>
+                        @if (!tenantSettings()?.qr_auto_open) { <button type="button" class="btn btn-sm btn-ghost" (click)="regeneratePin(table)" [disabled]="activatingTableId() === table.id" [title]="'TABLES.NEW_PIN' | translate">↻</button> }
                         <button type="button" class="btn btn-sm btn-warning" (click)="confirmCloseTable(table)" [disabled]="activatingTableId() === table.id" [title]="'TABLES.CLOSE_TABLE' | translate">⌫</button>
                       } @else {
                         <button type="button" class="btn btn-sm btn-success" (click)="activateTableSession(table)" [disabled]="activatingTableId() === table.id" [title]="'TABLES.ACTIVATE' | translate">▶</button>
@@ -398,7 +398,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                                       <span class="status-dot"></span>{{ 'TABLES.INACTIVE' | translate }}
                                     </span>
                                   }
-                                  @if (table.is_active && table.order_pin) {
+                                  @if (!tenantSettings()?.qr_auto_open && table.is_active && table.order_pin) {
                                     <span class="group-tile-member-pin">PIN {{ table.order_pin }}</span>
                                   }
                                 </button>
@@ -496,7 +496,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                       {{ 'TABLES.ACTIVE_SESSION_META' | translate: meta }}
                     </div>
                   }
-                  @if (table.order_pin) {
+                  @if (!tenantSettings()?.qr_auto_open && table.order_pin) {
                     <div class="pin-display">
                       <span class="pin-label">PIN:</span>
                       <span class="pin-value">{{ table.order_pin }}</span>
@@ -583,7 +583,7 @@ function getInitialTablesViewMode(): 'tiles' | 'table' {
                 [class.session-actions--inactive]="!table.is_active"
                 [class.session-actions--single]="table.is_active && !!table.order_pin">
                 @if (table.is_active) {
-                  @if (!table.order_pin) {
+                  @if (!tenantSettings()?.qr_auto_open && !table.order_pin) {
                     <button
                       type="button"
                       class="btn btn-sm btn-ghost"

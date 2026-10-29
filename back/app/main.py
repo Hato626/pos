@@ -50,6 +50,9 @@ from .product_bulk_import_routes import router as product_bulk_import_router
 from .tenant_subcategory_routes import router as tenant_subcategory_router
 from .reports_routes import router as reports_router
 from .platform_routes import router as platform_router
+from .platform_operations_routes import router as platform_operations_router
+from .adyen_routes import router as adyen_router, operator_router as adyen_operator_router, available as adyen_available
+from .platform_access import platform_access_middleware
 from .saas_routes import router as saas_router
 from .attendance_routes import router as attendance_router
 from .tenant_lifecycle_routes import router as tenant_lifecycle_router
@@ -455,6 +458,8 @@ async def saas_paywall_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+app.middleware("http")(platform_access_middleware)
+
 register_rate_limit_exception_handler(app)
 
 
@@ -632,6 +637,9 @@ app.include_router(
 app.include_router(reports_router, prefix="/reports", tags=["Reports"])
 app.include_router(attendance_router, prefix="/reports", tags=["Reports"])
 app.include_router(platform_router, prefix="/platform", tags=["Platform"])
+app.include_router(platform_operations_router, prefix="/platform/operations", tags=["Platform operations"])
+app.include_router(adyen_operator_router, prefix="/platform/operations", tags=["Platform payments"])
+app.include_router(adyen_router, prefix="/platform-payments", tags=["Adyen checkout"])
 app.include_router(saas_router, prefix="/saas", tags=["SaaS billing"])
 # Owner-only data export & tenant purge (GitHub #96)
 app.include_router(tenant_lifecycle_router, prefix="/tenant", tags=["Tenant lifecycle"])
@@ -4358,6 +4366,8 @@ def update_tenant_settings(
         tenant.opening_hours = (
             tenant_update.opening_hours.strip() if tenant_update.opening_hours else None
         )
+    if tenant_update.qr_auto_open is not None:
+        tenant.qr_auto_open = tenant_update.qr_auto_open
     if tenant_update.immediate_payment_required is not None:
         tenant.immediate_payment_required = tenant_update.immediate_payment_required
     # Use model_fields_set so explicit null clears the default (None alone is the unset default).
@@ -11974,7 +11984,8 @@ def activate_table(
         raise HTTPException(status_code=404, detail="Table not found")
 
     # Generate a cryptographically random 4-digit PIN
-    pin = str(secrets.randbelow(9000) + 1000)
+    automatic = bool(getattr(session.get(models.Tenant, table.tenant_id), "qr_auto_open", False))
+    pin = None if automatic else str(secrets.randbelow(9000) + 1000)
 
     # Activate table only; order is created when customer adds first items via POST /menu/.../order
     table.order_pin = pin
@@ -12015,7 +12026,7 @@ def close_table(
         select(models.Table).where(
             models.Table.id == table_id,
             models.Table.tenant_id == current_user.tenant_id,
-        )
+        ).with_for_update()
     ).first()
 
     if not table:
@@ -12116,6 +12127,9 @@ def regenerate_table_pin(
         raise HTTPException(status_code=400, detail="Table is not active. Activate it first.")
 
     # Generate a cryptographically random 4-digit PIN
+    if getattr(session.get(models.Tenant, table.tenant_id), "qr_auto_open", False):
+        raise HTTPException(status_code=409, detail="Automatic QR ordering does not use a PIN")
+
     pin = str(secrets.randbelow(9000) + 1000)
     table.order_pin = pin
 
@@ -12293,7 +12307,8 @@ def get_menu(
         table_row[6],
     )
 
-    if not table.is_active:
+    qr_auto_open = bool(getattr(session.get(models.Tenant, table.tenant_id), "qr_auto_open", False))
+    if not table.is_active and not qr_auto_open:
         # Return tenant/table info so the frontend can show a branded "table closed" page
         tenant = session.exec(
             select(models.Tenant).where(models.Tenant.id == table.tenant_id)
@@ -12739,6 +12754,7 @@ def get_menu(
         "tenant_stripe_publishable_key": tenant.stripe_publishable_key
         if tenant
         else None,
+        "tenant_adyen_configured": adyen_available(session, table.tenant_id),
         "tenant_revolut_configured": bool(
             tenant
             and (
@@ -12754,12 +12770,13 @@ def get_menu(
         # Table session status (take-away/home ordering tables do not require PIN; staff_access also skips PIN)
         "table_is_active": table.is_active,
         "table_requires_pin": False
-        if _is_take_away_table(table)
+        if qr_auto_open or _is_take_away_table(table)
         or (staff_access and _verify_staff_menu_token(table.token, staff_access))
         else (table.is_active and table.order_pin is not None),
         "active_order_id": table.active_order_id,
         # Shared draft cart: dine-in activated tables only (not take-away). Needs Redis.
-        "table_shared_cart": bool(table.is_active and not _is_take_away_table(table)),
+        "table_shared_cart": bool((table.is_active or qr_auto_open) and not _is_take_away_table(table)),
+        "table_auto_open_on_order": qr_auto_open,
         "products": products_list,
     }
 
@@ -12816,8 +12833,9 @@ class TableCartItemUpdate(_BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
-def _table_allows_shared_cart(table: models.Table) -> bool:
-    return bool(table.is_active and not _is_take_away_table(table))
+def _table_allows_shared_cart(table: models.Table, session: Session) -> bool:
+    automatic = bool(getattr(session.get(models.Tenant, table.tenant_id), "qr_auto_open", False))
+    return bool((table.is_active or automatic) and not _is_take_away_table(table))
 
 
 def _resolve_menu_cart_product(
@@ -12885,7 +12903,7 @@ def get_table_cart(
     table = session.exec(select(models.Table).where(models.Table.token == table_token)).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
-    if not _table_allows_shared_cart(table):
+    if not _table_allows_shared_cart(table, session):
         return _cart_response(False, {}, reason="local_only")
     r = get_redis()
     if r is None:
@@ -12906,7 +12924,7 @@ def add_table_cart_item(
     table = session.exec(select(models.Table).where(models.Table.token == table_token)).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
-    if not _table_allows_shared_cart(table):
+    if not _table_allows_shared_cart(table, session):
         raise HTTPException(status_code=400, detail="Shared cart is not available for this table")
     r = get_redis()
     if r is None:
@@ -12946,7 +12964,7 @@ def update_table_cart_item(
     table = session.exec(select(models.Table).where(models.Table.token == table_token)).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
-    if not _table_allows_shared_cart(table):
+    if not _table_allows_shared_cart(table, session):
         raise HTTPException(status_code=400, detail="Shared cart is not available for this table")
     r = get_redis()
     if r is None:
@@ -12980,7 +12998,7 @@ def delete_table_cart_item(
     table = session.exec(select(models.Table).where(models.Table.token == table_token)).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
-    if not _table_allows_shared_cart(table):
+    if not _table_allows_shared_cart(table, session):
         raise HTTPException(status_code=400, detail="Shared cart is not available for this table")
     r = get_redis()
     if r is None:
@@ -13505,7 +13523,7 @@ def create_order(
 ) -> dict:
     """Public endpoint - add items to the table's shared order."""
     table = session.exec(
-        select(models.Table).where(models.Table.token == table_token)
+        select(models.Table).where(models.Table.token == table_token).with_for_update()
     ).first()
 
     if not table:
@@ -13518,8 +13536,9 @@ def create_order(
     tenant = session.get(models.Tenant, table.tenant_id)
 
     # ============ TABLE ACTIVATION & PIN VALIDATION ============
-    # Check if table is active (staff has opened it)
-    if not table.is_active:
+    qr_auto_open = bool(getattr(tenant, "qr_auto_open", False))
+    # The table lock serializes simultaneous first orders into one table session.
+    if not table.is_active and not qr_auto_open:
         raise HTTPException(
             status_code=403, 
             detail="Table is not accepting orders. Please ask staff to activate the table."
@@ -13527,7 +13546,7 @@ def create_order(
 
     # Validate PIN (with rate limiting). Skip for take-away/home ordering tables or valid staff_access.
     staff_skip_pin = order_data.staff_access and _verify_staff_menu_token(table_token, order_data.staff_access)
-    if not _is_take_away_table(table) and not staff_skip_pin:
+    if not qr_auto_open and not _is_take_away_table(table) and not staff_skip_pin:
         redis_conn = get_redis()
         attempts_key = None
         lock_key = None
@@ -13884,6 +13903,13 @@ def create_order(
             )
             session.add(order_item)
     
+    if qr_auto_open:
+        if not table.is_active:
+            table.is_active = True
+            table.activated_at = datetime.now(timezone.utc)
+        table.order_pin = None
+        session.add(table)
+
     # After adding items, recompute order status (paid orders may leave completed → paid if new work)
     all_items = session.exec(select(models.OrderItem).where(models.OrderItem.order_id == order.id)).all()
     recompute_order_status_preserving_payment(order, list(all_items))
@@ -13913,13 +13939,15 @@ def create_order(
     }, table_id=table.id)
 
     # Remove this device's draft cart lines after they were submitted to the shared order
-    if order_data.session_id and _table_allows_shared_cart(table):
+    if order_data.session_id and _table_allows_shared_cart(table, session):
         table_cart_svc.remove_session_items(get_redis(), table.id, order_data.session_id.strip())
         _publish_cart_updated(table)
 
     return JSONResponse(content={
         "status": "created" if is_new_order else "updated",
         "order_id": order.id,
+        "table_is_active": table.is_active,
+        "table_auto_open_on_order": qr_auto_open,
         "session_id": order.session_id,
         "customer_name": order.customer_name,
     })
@@ -15129,6 +15157,9 @@ def unmark_order_paid(
         raise HTTPException(status_code=400, detail="Cannot unmark a cancelled order.")
     if order.status != models.OrderStatus.paid and order.paid_at is None:
         raise HTTPException(status_code=400, detail="Order is not paid.")
+
+    if any(p.payment_method == "adyen" for p in order_pay_svc.list_active_payments(session, order_id)):
+        raise HTTPException(409, "Refund Adyen payments from platform payment management")
 
     # TSE storno before clearing paid mark (#316)
     maybe_sign_storno_after_unmark(session, order)

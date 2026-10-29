@@ -5,7 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Title } from '@angular/platform-browser';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { forkJoin, merge, of } from 'rxjs';
-import { catchError } from 'rxjs/operators';
+import { catchError, tap } from 'rxjs/operators';
 import { ApiService, LoyaltyProgramPublic, TenantSummary } from '../services/api.service';
 import { LanguagePickerComponent } from '../shared/language-picker.component';
 import { PublicGuestHeaderComponent } from '../shared/public-guest-header.component';
@@ -104,7 +104,13 @@ export class LoyaltyPublicComponent implements OnInit {
     }
     forkJoin({
       program: this.api.getPublicLoyaltyProgram(id),
-      tenant: this.api.getPublicTenant(id).pipe(catchError(() => of(null))),
+      tenant: this.api.getPublicTenant(id).pipe(
+        tap((tenant) => {
+          this.tenant.set(tenant);
+          this.logoUrl.set(this.api.getTenantLogoUrl(tenant.logo_filename ?? undefined, tenant.id));
+        }),
+        catchError(() => of(null)),
+      ),
     }).subscribe({
       next: ({ program, tenant }) => {
         this.program.set(program);

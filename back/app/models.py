@@ -118,6 +118,9 @@ class Tenant(SQLModel, table=True):
         default=False
     )  # Require immediate payment for orders
 
+    # Automatic QR ordering: browse while free; first successful order opens the table.
+    qr_auto_open: bool = Field(default=False)
+
     # Currency: store ISO 4217 code internally; frontend derives symbol via Intl.
     # Keep `currency` (symbol) for backward compatibility.
     currency_code: str | None = Field(
@@ -1867,6 +1870,7 @@ class TenantUpdate(SQLModel):
     ccc: str | None = None
     opening_hours: str | None = None  # JSON string
     immediate_payment_required: bool | None = None
+    qr_auto_open: bool | None = None
 
     # Preferred configuration: ISO 4217 currency code.
     currency_code: str | None = None

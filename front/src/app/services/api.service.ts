@@ -14,6 +14,7 @@ import {
 } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { LanguageService } from './language.service';
+import { PublicTenantCacheService } from './public-tenant-cache.service';
 
 // Interfaces
 export type UserRole = 'owner' | 'admin' | 'kitchen' | 'bartender' | 'waiter' | 'receptionist' | 'courier' | 'provider' | 'platform_operator';
@@ -1736,6 +1737,7 @@ export interface MenuResponse {
   tenant_currency?: string | null;
   tenant_currency_code?: string | null;
   tenant_stripe_publishable_key?: string | null;
+  tenant_adyen_configured?: boolean;
   tenant_revolut_configured?: boolean;
   tenant_immediate_payment_required?: boolean;
   tenant_public_background_color?: string | null;
@@ -1744,6 +1746,7 @@ export interface MenuResponse {
   // Table session status
   table_is_active?: boolean;
   table_requires_pin?: boolean;
+  table_auto_open_on_order?: boolean;
   active_order_id?: number | null;
   /** When true, draft cart is shared across devices on this table token (#349). */
   table_shared_cart?: boolean;
@@ -1802,6 +1805,7 @@ export interface TenantSettings {
   header_background_filename?: string | null;
   opening_hours?: string | null;
   immediate_payment_required?: boolean;
+  qr_auto_open?: boolean;
   currency?: string | null;
   currency_code?: string | null;
   default_language?: string | null;
@@ -2071,6 +2075,7 @@ export interface TenantProduct {
   providedIn: 'root'
 })
 export class ApiService {
+  private publicTenantCache = inject(PublicTenantCacheService);
   private http = inject(HttpClient);
   private language = inject(LanguageService);
   private apiUrl = environment.apiUrl;
@@ -3901,7 +3906,9 @@ export class ApiService {
   }
 
   getPublicTenant(tenantRef: number | string): Observable<TenantSummary> {
-    return this.http.get<TenantSummary>(`${this.apiUrl}/public/tenants/${tenantRef}`);
+    return this.publicTenantCache.get(tenantRef, () =>
+      this.http.get<TenantSummary>(`${this.apiUrl}/public/tenants/${encodeURIComponent(String(tenantRef))}`),
+    );
   }
 
   /** Read-only grouped menu for a tenant (public marketing / QR menu page). */
