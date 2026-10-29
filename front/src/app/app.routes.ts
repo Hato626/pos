@@ -63,8 +63,15 @@ export const routes: Routes = [
   // Platform operator portal (public auth + protected dashboard)
   { path: 'platform/login', loadComponent: () => import('./platform/platform-login.component').then(m => m.PlatformLoginComponent) },
   { path: 'platform/tenants/:tenantId', canActivate: [platformGuard], loadComponent: () => import('./platform/platform-tenant-detail.component').then(m => m.PlatformTenantDetailComponent) },
-  { path: 'platform', canActivate: [platformGuard], loadComponent: () => import('./platform/platform-dashboard.component').then(m => m.PlatformDashboardComponent) },
+  { path: 'platform', canActivate: [platformGuard], loadComponent: () => import('./platform/platform-console.component').then(m => m.PlatformConsoleComponent) },
+  { path: 'payment-result/:paymentId', loadComponent: () => import('./platform/payment-result.component').then(m => m.PaymentResultComponent) },
   { path: 'menu/:token', loadComponent: () => import('./menu/menu.component').then(m => m.MenuComponent) },
+  // Customer-facing counter / coffee-shop display (second screen; table token pairing) — #434
+  {
+    path: 'display/:tableToken',
+    loadComponent: () =>
+      import('./customer-display/customer-display.component').then((m) => m.CustomerDisplayComponent),
+  },
   { path: 'menu/:token/payment-success', loadComponent: () => import('./menu/payment-success.component').then(m => m.PaymentSuccessComponent) },
   { path: 'public-menu/:tenantId', loadComponent: () => import('./public-menu/public-menu.component').then(m => m.PublicMenuComponent) },
   {

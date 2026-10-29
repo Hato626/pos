@@ -27,6 +27,7 @@ import { PromoSettingsComponent } from './promo-settings.component';
 import { RestaurantGroupSettingsComponent } from './restaurant-group-settings.component';
 import { DeliveryIntegrationsSettingsComponent } from './delivery-integrations-settings.component';
 import { SocialPostsSettingsComponent } from './social-posts-settings.component';
+import { NewsletterSettingsComponent } from './newsletter-settings.component';
 import { ContractTemplatesSettingsComponent } from './contract-templates-settings.component';
 import { PermissionService } from '../services/permission.service';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
@@ -48,6 +49,7 @@ type SettingsSectionId =
   | 'promos'
   | 'restaurant-group'
   | 'social-posts'
+  | 'newsletter'
   | 'contract-templates'
   | 'providers'
   | 'translations'
@@ -81,6 +83,7 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
   promos: 'promos',
   'restaurant-group': 'restaurant-group',
   'social-posts': 'social-posts',
+  newsletter: 'newsletter',
   'contract-templates': 'contract-templates',
   providers: 'providers',
   translations: 'translations',
@@ -106,6 +109,7 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
     DeliveryIntegrationsSettingsComponent,
     ContractTemplatesSettingsComponent,
     SocialPostsSettingsComponent,
+    NewsletterSettingsComponent,
   ],
   template: `
     <app-sidebar>
@@ -303,6 +307,19 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
               <circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="9" r="1.5"/><path d="M9 13h6"/>
             </svg>
             <span>{{ 'SETTINGS.SOCIAL_POSTS_TAB' | translate }}</span>
+          </button>
+          <button
+            type="button"
+            class="settings-nav-item"
+            data-testid="settings-newsletter-tab"
+            [class.active]="activeSection() === 'newsletter'"
+            (click)="selectSection('newsletter')"
+          >
+            <svg class="settings-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4h16v16H4z"/>
+              <path d="M4 8l8 5 8-5"/>
+            </svg>
+            <span>{{ 'SETTINGS.NEWSLETTER_TAB' | translate }}</span>
           </button>
           @if (settingsModuleTabVisible('providers')) {
           <button 
@@ -699,6 +716,8 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
           <app-promo-settings />
         } @else if (activeSection() === 'social-posts') {
           <app-social-posts-settings />
+        } @else if (activeSection() === 'newsletter') {
+          <app-newsletter-settings />
         } @else if (activeSection() === 'contract-templates') {
           <app-contract-templates-settings />
         } @else if (activeSection() === 'translations') {
@@ -1771,6 +1790,15 @@ const SETTINGS_SECTION_HASH: Record<SettingsSectionId, string> = {
                     </div>
                   }
                   
+                  <div class="form-group checkbox-row" data-testid="qr-auto-open-setting">
+                    <label class="switch">
+                      <input type="checkbox" [(ngModel)]="formData.qr_auto_open" name="qr_auto_open">
+                      <span class="slider round"></span>
+                    </label>
+                    <div><label class="check-label">{{ 'QR_ORDERING.AUTO_OPEN' | translate }}</label>
+                      <p class="hint">{{ 'QR_ORDERING.AUTO_OPEN_HINT' | translate }}</p></div>
+                  </div>
+
                   <div class="form-group checkbox-row">
                     <label class="switch">
                       <input type="checkbox" [(ngModel)]="formData.immediate_payment_required" name="immediate_payment_required">
@@ -3477,6 +3505,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     'restaurant-group',
     'delivery',
     'social-posts',
+    'newsletter',
     'contract-templates',
     'providers',
     'translations',
@@ -3674,6 +3703,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     stripe_publishable_key: null,
     revolut_merchant_secret: null,
     immediate_payment_required: false,
+    qr_auto_open: false,
     timezone: null,
     country_code: null,
     smtp_host: null,
@@ -3925,6 +3955,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
           stripe_publishable_key: settings.stripe_publishable_key || null,
           revolut_merchant_secret: null,
           immediate_payment_required: settings.immediate_payment_required || false,
+          qr_auto_open: settings.qr_auto_open === true,
           timezone: settings.timezone || null,
           country_code: settings.country_code ?? null,
           smtp_host: settings.smtp_host ?? null,

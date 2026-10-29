@@ -14,6 +14,7 @@ import {
 } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { LanguageService } from './language.service';
+import { PublicTenantCacheService } from './public-tenant-cache.service';
 
 // Interfaces
 export type UserRole = 'owner' | 'admin' | 'kitchen' | 'bartender' | 'waiter' | 'receptionist' | 'courier' | 'provider' | 'platform_operator';
@@ -1118,6 +1119,31 @@ export interface SocialPostPublic {
   targets: SocialPostTargetPublic[];
 }
 
+export type NewsletterAudienceSource = 'billing_customers' | 'reservations' | 'both';
+
+export interface NewsletterAudienceResponse {
+  billing_customers: number;
+  reservations: number;
+  both: number;
+  sample_emails: string[];
+}
+
+export interface NewsletterCampaignPublic {
+  id: number;
+  subject: string;
+  audience_source: string;
+  status: string;
+  schedule_at: string;
+  recipient_count: number;
+  sent_count: number;
+  failed_count: number;
+  open_count: number;
+  click_count: number;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Product customization question (e.g. meat doneness, spice 1–10, multi toppings) */
 export interface ProductBulkImportPreviewRow {
   row_index: number;
@@ -1454,9 +1480,16 @@ export interface FiscalInvoicePublic {
   full_number: string;
   mode: string;
   status: string;
+  record_type?: string;
   issued_at: string | null;
   verification_qr_content: string;
   verification_text: string;
+  previous_hash?: string;
+  record_hash?: string;
+  amount_cents?: number;
+  submission_status?: string;
+  sandbox_submitted_at?: string | null;
+  cancels_fiscal_invoice_id?: number | null;
 }
 
 /** German TSE transaction metadata (KassenSichV preparation — not a certification claim). */
@@ -1558,6 +1591,8 @@ export interface Order {
   notes?: string;
   session_id?: string;
   customer_name?: string;
+  /** Guest email from customer display (#434). */
+  invoice_email?: string | null;
   billing_customer_id?: number | null;
   billing_customer?: BillingCustomer | null;
   created_at: string;
@@ -1702,6 +1737,7 @@ export interface MenuResponse {
   tenant_currency?: string | null;
   tenant_currency_code?: string | null;
   tenant_stripe_publishable_key?: string | null;
+  tenant_adyen_configured?: boolean;
   tenant_revolut_configured?: boolean;
   tenant_immediate_payment_required?: boolean;
   tenant_public_background_color?: string | null;
@@ -1710,6 +1746,7 @@ export interface MenuResponse {
   // Table session status
   table_is_active?: boolean;
   table_requires_pin?: boolean;
+  table_auto_open_on_order?: boolean;
   active_order_id?: number | null;
   /** When true, draft cart is shared across devices on this table token (#349). */
   table_shared_cart?: boolean;
@@ -1768,6 +1805,7 @@ export interface TenantSettings {
   header_background_filename?: string | null;
   opening_hours?: string | null;
   immediate_payment_required?: boolean;
+  qr_auto_open?: boolean;
   currency?: string | null;
   currency_code?: string | null;
   default_language?: string | null;
@@ -2037,6 +2075,7 @@ export interface TenantProduct {
   providedIn: 'root'
 })
 export class ApiService {
+  private publicTenantCache = inject(PublicTenantCacheService);
   private http = inject(HttpClient);
   private language = inject(LanguageService);
   private apiUrl = environment.apiUrl;
@@ -3131,6 +3170,11 @@ export class ApiService {
     return this.http.get<FiscalInvoicePublic>(`${this.apiUrl}/orders/${orderId}/fiscal-invoice`);
   }
 
+  /** Anulación (credit-note cancel) for an active fiscal alta — see docs/0018. */
+  cancelOrderFiscalInvoice(orderId: number): Observable<FiscalInvoicePublic> {
+    return this.http.post<FiscalInvoicePublic>(`${this.apiUrl}/orders/${orderId}/fiscal-invoice/cancel`, {});
+  }
+
   getOrderTseTransaction(orderId: number): Observable<TseTransactionPublic> {
     return this.http.get<TseTransactionPublic>(`${this.apiUrl}/orders/${orderId}/tse-transaction`);
   }
@@ -3349,12 +3393,26 @@ export class ApiService {
     });
   }
 
-  getCurrentOrder(tableToken: string, sessionId?: string): Observable<any> {
+  getCurrentOrder(tableToken: string, sessionId?: string, forDisplay = false): Observable<any> {
     let params = new HttpParams();
     if (sessionId) {
       params = params.set('session_id', sessionId);
     }
+    if (forDisplay) {
+      params = params.set('for_display', 'true');
+    }
     return this.http.get(`${this.apiUrl}/menu/${tableToken}/order`, { params });
+  }
+
+  /** Public customer display (#434): save invoice email on the active table order. */
+  setOrderInvoiceEmail(
+    tableToken: string,
+    email: string,
+  ): Observable<{ ok: boolean; invoice_email: string; order_id: number }> {
+    return this.http.post<{ ok: boolean; invoice_email: string; order_id: number }>(
+      `${this.apiUrl}/menu/${tableToken}/order/invoice-email`,
+      { email },
+    );
   }
 
   getTableCart(tableToken: string): Observable<TableCartResponse> {
@@ -3716,6 +3774,47 @@ export class ApiService {
     return this.http.post<SocialPostPublic>(`${this.apiUrl}/tenant/social/posts`, fd);
   }
 
+  getNewsletterAudience(): Observable<NewsletterAudienceResponse> {
+    return this.http.get<NewsletterAudienceResponse>(`${this.apiUrl}/tenant/newsletter/audience`);
+  }
+
+  getNewsletterCampaigns(limit = 50): Observable<NewsletterCampaignPublic[]> {
+    return this.http.get<NewsletterCampaignPublic[]>(`${this.apiUrl}/tenant/newsletter/campaigns`, {
+      params: { limit: String(limit) },
+    });
+  }
+
+  createNewsletterCampaign(body: {
+    subject: string;
+    body_html: string;
+    body_text?: string | null;
+    audience_source: NewsletterAudienceSource;
+    consent_confirmed: boolean;
+    send_now: boolean;
+    schedule_at?: string | null;
+  }): Observable<NewsletterCampaignPublic> {
+    return this.http.post<NewsletterCampaignPublic>(`${this.apiUrl}/tenant/newsletter/campaigns`, body);
+  }
+
+  cancelNewsletterCampaign(id: number): Observable<NewsletterCampaignPublic> {
+    return this.http.post<NewsletterCampaignPublic>(
+      `${this.apiUrl}/tenant/newsletter/campaigns/${id}/cancel`,
+      {}
+    );
+  }
+
+  sendNewsletterTest(body: {
+    subject: string;
+    body_html: string;
+    body_text?: string | null;
+    to_email?: string | null;
+  }): Observable<{ ok: boolean; to_email: string }> {
+    return this.http.post<{ ok: boolean; to_email: string }>(
+      `${this.apiUrl}/tenant/newsletter/test-send`,
+      body
+    );
+  }
+
   getKitchenDisplaySettings(): Observable<{ yellow_minutes: number; orange_minutes: number; red_minutes: number }> {
     return this.http.get<{ yellow_minutes: number; orange_minutes: number; red_minutes: number }>(
       `${this.apiUrl}/tenant/kitchen-display-settings`
@@ -3807,7 +3906,9 @@ export class ApiService {
   }
 
   getPublicTenant(tenantRef: number | string): Observable<TenantSummary> {
-    return this.http.get<TenantSummary>(`${this.apiUrl}/public/tenants/${tenantRef}`);
+    return this.publicTenantCache.get(tenantRef, () =>
+      this.http.get<TenantSummary>(`${this.apiUrl}/public/tenants/${encodeURIComponent(String(tenantRef))}`),
+    );
   }
 
   /** Read-only grouped menu for a tenant (public marketing / QR menu page). */

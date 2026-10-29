@@ -1,4 +1,4 @@
-import { Component, OnInit, computed, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { RouterLink } from '@angular/router';
 import { TranslateModule } from '@ngx-translate/core';
@@ -21,10 +21,11 @@ export type PublicGuestNavKey = 'menu' | 'book' | 'waitlist' | 'delivery' | 'loy
   standalone: true,
   imports: [RouterLink, TranslateModule, LanguagePickerComponent],
   template: `
-    @if (tenantId() > 0) {
+    @if (tenantId() > 0 && name()) {
       <header
         class="public-guest-header"
         data-testid="public-guest-header"
+        [style.--hero-header-bg]="resolvedBg()"
         [style.--hero-header-fg]="headerFg()"
         [attr.data-header-ink]="headerInkMode()"
       >
@@ -97,6 +98,7 @@ export type PublicGuestNavKey = 'menu' | 'book' | 'waitlist' | 'delivery' | 'loy
   styles: `
     :host {
       display: block;
+      min-height: 3.25rem;
       position: sticky;
       top: 0;
       z-index: 40;
@@ -199,7 +201,7 @@ export type PublicGuestNavKey = 'menu' | 'book' | 'waitlist' | 'delivery' | 'loy
     }
   `,
 })
-export class PublicGuestHeaderComponent implements OnInit {
+export class PublicGuestHeaderComponent {
   private api = inject(ApiService);
   private sanitizer = inject(DomSanitizer);
 
@@ -217,6 +219,7 @@ export class PublicGuestHeaderComponent implements OnInit {
   private fetchedName = signal<string | null>(null);
   private fetchedLogo = signal<string | null>(null);
   private fetchedBg = signal<string | null>(null);
+  private fetchedPrimary = signal<string | null>(null);
   private fetchedMenuRef = signal<string | number | null>(null);
   private fetchedBookSlug = signal<string | null>(null);
 
@@ -236,10 +239,10 @@ export class PublicGuestHeaderComponent implements OnInit {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);
   });
 
-  private resolvedBg = computed(
+  resolvedBg = computed(
     () =>
       normalizeHex6(this.headerBackgroundColor()) ||
-      normalizeHex6(this.fetchedBg()),
+      normalizeHex6(this.fetchedBg()) || normalizeHex6(this.fetchedPrimary()),
   );
 
   headerFg = computed(() => pickContrastingForeground(this.resolvedBg()));
@@ -248,32 +251,28 @@ export class PublicGuestHeaderComponent implements OnInit {
     this.headerFg() === '#ffffff' ? 'light' : 'dark',
   );
 
-  ngOnInit(): void {
-    const id = this.tenantId();
-    if (!id) return;
-    const haveName = !!this.tenantName()?.trim();
-    const haveLogo = !!this.logoUrl();
-    const haveBg = !!normalizeHex6(this.headerBackgroundColor());
-    const haveMenuRef =
-      this.publicMenuRef() != null && String(this.publicMenuRef()).trim() !== '';
-    const haveBookSlug = !!this.publicBookSlug()?.trim();
-    if (haveName && haveLogo && haveBg && haveMenuRef && haveBookSlug) return;
-    this.api.getPublicTenant(id).subscribe({
-      next: (t) => {
-        if (!haveName) this.fetchedName.set(t.name);
-        if (!haveLogo) {
+  constructor() {
+    effect((onCleanup) => {
+      const id = this.tenantId();
+      this.fetchedName.set(null);
+      this.fetchedLogo.set(null);
+      this.fetchedBg.set(null);
+      this.fetchedPrimary.set(null);
+      this.fetchedMenuRef.set(null);
+      this.fetchedBookSlug.set(null);
+      if (!id) return;
+      const subscription = this.api.getPublicTenant(id).subscribe({
+        next: (t) => {
+          this.fetchedName.set(t.name);
           this.fetchedLogo.set(this.api.getTenantLogoUrl(t.logo_filename ?? undefined, t.id));
-        }
-        if (!haveBg) {
           this.fetchedBg.set(t.public_background_color ?? null);
-        }
-        const slug = t.public_slug?.trim();
-        this.fetchedMenuRef.set(slug || t.id);
-        if (!haveBookSlug) this.fetchedBookSlug.set(slug || null);
-      },
-      error: () => {
-        /* Parent pages already show load errors. */
-      },
+          this.fetchedPrimary.set(t.public_primary_color ?? null);
+          this.fetchedMenuRef.set(t.public_slug?.trim() || t.id);
+          this.fetchedBookSlug.set(t.public_slug?.trim() || null);
+        },
+        error: () => { /* Parent pages show load errors. */ },
+      });
+      onCleanup(() => subscription.unsubscribe());
     });
   }
 }

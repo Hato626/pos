@@ -5,6 +5,7 @@ import { CommonModule, SlicePipe } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { ApiService, Product, ProductQuestion, OrderItemCreate, OrderHistoryItem, TableCartResponse } from '../services/api.service';
 import { AudioService } from '../services/audio.service';
+import { PlatformOperationsService } from '../platform/platform-operations.service';
 import { environment } from '../../environments/environment';
 import { FocusFirstInputDirective } from '../shared/focus-first-input.directive';
 import { LanguagePickerComponent } from '../shared/language-picker.component';
@@ -49,6 +50,9 @@ export class MenuComponent implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private api = inject(ApiService);
   private audio = inject(AudioService);
+  private platformPayments = inject(PlatformOperationsService);
+  tenantAdyenConfigured = signal(false);
+  tenantStripeConfigured = signal(false);
   private sanitizer = inject(DomSanitizer);
   private translate = inject(TranslateService);
 
@@ -136,6 +140,7 @@ export class MenuComponent implements OnInit, OnDestroy {
   // Table session
   tableIsActive = signal(true);  // Default true for backward compatibility
   tableRequiresPin = signal(false);
+  tableAutoOpenOnOrder = signal(false);
   showPinModal = signal(false);
   pinValue = signal('');
   pinError = signal('');
@@ -238,7 +243,7 @@ export class MenuComponent implements OnInit, OnDestroy {
     const customerName = localStorage.getItem(nameKey);
 
     if (!customerName) {
-      this.showNameModal.set(true);
+      this.showNameModal.set(!this.tableAutoOpenOnOrder());
     } else {
       this.customerName.set(customerName);
     }
@@ -312,6 +317,8 @@ export class MenuComponent implements OnInit, OnDestroy {
         this.tenantPublicPrimaryColor.set(data.tenant_public_primary_color ?? null);
         this.tenantHeaderBackgroundFilename.set(data.tenant_header_background_filename ?? null);
 
+        this.tenantAdyenConfigured.set(!!data.tenant_adyen_configured);
+        this.tenantStripeConfigured.set(!!data.tenant_stripe_publishable_key);
         if (data.tenant_stripe_publishable_key) {
           this.api.setTenantStripeKey(data.tenant_stripe_publishable_key);
         }
@@ -319,7 +326,14 @@ export class MenuComponent implements OnInit, OnDestroy {
 
         // Table session status
         this.tableIsActive.set(data.table_is_active !== false);  // Default true for backward compatibility
-        this.tableRequiresPin.set(data.table_requires_pin === true);
+        this.tableAutoOpenOnOrder.set(data.table_auto_open_on_order === true);
+        this.tableRequiresPin.set(!this.tableAutoOpenOnOrder() && data.table_requires_pin === true);
+        if (this.tableAutoOpenOnOrder()) {
+          this.currentPin = "";
+          this.showPinModal.set(false);
+          this.showNameModal.set(false);
+          sessionStorage.removeItem(`pin_${this.tableToken}`);
+        }
         this.sharedCartEnabled.set(data.table_shared_cart === true);
 
         // Check if the table session has changed (table was closed and reopened).
@@ -343,7 +357,7 @@ export class MenuComponent implements OnInit, OnDestroy {
           const newSessionId = this.generateUUID();
           localStorage.setItem(`session_${this.tableToken}`, newSessionId);
           this.sessionId = newSessionId;
-          this.showNameModal.set(true);
+          this.showNameModal.set(!this.tableAutoOpenOnOrder());
 
           // Store new active_order_id
           localStorage.setItem(`active_order_${this.tableToken}`, currentOrderId);
@@ -409,7 +423,24 @@ export class MenuComponent implements OnInit, OnDestroy {
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'table_closed') {
+        if (data.type === 'table_closed' && this.tableAutoOpenOnOrder()) {
+          // The next party can browse immediately. A successful first order opens a fresh session.
+          this.tableIsActive.set(false);
+          this.tableClosed.set(false);
+          this.placedOrders.set([]);
+          this.cart.set([]);
+          this.cartExpanded.set(false);
+          this.lastOrderId.set(0);
+          localStorage.removeItem(`active_order_${this.tableToken}`);
+          localStorage.removeItem(`orders_${this.tableToken}`);
+          localStorage.removeItem(`customer_name_${this.tableToken}`);
+          this.customerName.set('');
+          sessionStorage.removeItem(`pin_${this.tableToken}`);
+          this.currentPin = '';
+          this.sessionId = this.generateUUID();
+          localStorage.setItem(`session_${this.tableToken}`, this.sessionId);
+          return;
+        } else if (data.type === 'table_closed') {
           // Staff has closed this table -- show the closed screen
           this.tableIsActive.set(false);
           this.tableClosed.set(true);
@@ -1154,7 +1185,7 @@ export class MenuComponent implements OnInit, OnDestroy {
   // ============================================
   submitOrder() {
     // Check if table is active
-    if (!this.tableIsActive()) {
+    if (!this.tableIsActive() && !this.tableAutoOpenOnOrder()) {
       alert('This table is not accepting orders. Please ask staff for assistance.');
       return;
     }
@@ -1191,6 +1222,7 @@ export class MenuComponent implements OnInit, OnDestroy {
   }
 
   private async doSubmitOrder() {
+    if (this.submitting()) return;
     const myLines = this.cart().filter(item => this.isMyCartItem(item));
     if (myLines.length === 0) {
       alert(this.translate.instant('MENU.PLACE_OWN_ITEMS_ONLY'));
@@ -1204,6 +1236,7 @@ export class MenuComponent implements OnInit, OnDestroy {
       customization_answers: item.customization_answers && Object.keys(item.customization_answers).length > 0 ? item.customization_answers : undefined
     }));
 
+    this.submitting.set(true);
     // Try to get location (optional, non-blocking)
     let latitude: number | null = null;
     let longitude: number | null = null;
@@ -1236,6 +1269,10 @@ export class MenuComponent implements OnInit, OnDestroy {
     }).subscribe({
       next: (response: any) => {
         const orderId = response.order_id;
+        if (this.tableAutoOpenOnOrder()) {
+          this.tableIsActive.set(true);
+          localStorage.setItem(`active_order_${this.tableToken}`, String(orderId));
+        }
 
         if (response.session_id && response.session_id !== this.sessionId) {
           console.warn('Session ID mismatch - order may belong to different session');
@@ -1279,7 +1316,7 @@ export class MenuComponent implements OnInit, OnDestroy {
         const detail = err.error?.detail;
         const errorMsg = typeof detail === 'string' ? detail : 'Failed to place order.';
 
-        if (err.status === 429) {
+        if (err.status === 429 && this.tableRequiresPin()) {
           this.currentPin = '';
           sessionStorage.removeItem(`pin_${this.tableToken}`);
           this.pinError.set(errorMsg);
@@ -1288,7 +1325,7 @@ export class MenuComponent implements OnInit, OnDestroy {
         }
 
         // Check if it's a PIN error
-        if (errorMsg.includes('PIN') || errorMsg.includes('pin')) {
+        if (this.tableRequiresPin() && (errorMsg.includes('PIN') || errorMsg.includes('pin'))) {
           // Clear the stored PIN and show modal again
           this.currentPin = '';
           sessionStorage.removeItem(`pin_${this.tableToken}`);
@@ -1534,8 +1571,18 @@ export class MenuComponent implements OnInit, OnDestroy {
   // --- Payment options handlers ---
 
   selectPayOnline() {
-    // Show loading state in the payment options sheet while we create the intent
+    if (this.paymentRequestSending() || !this.currentOrderId || !this.tableToken) return;
     this.paymentRequestSending.set(true);
+    if (this.tenantAdyenConfigured()) {
+      this.platformPayments.paymentLink(this.currentOrderId, this.tableToken).subscribe({
+        next: result => {
+          if (result.checkout_url) window.location.assign(result.checkout_url);
+          else { this.paymentRequestSending.set(false); alert(this.translate.instant('OPS.CHECKOUT_ERROR')); }
+        },
+        error: err => { this.paymentRequestSending.set(false); alert(err.error?.detail || this.translate.instant('OPS.CHECKOUT_ERROR')); }
+      });
+      return;
+    }
     this.doStripeCheckout();
   }
 

@@ -393,6 +393,8 @@ def void_payment(
     row = session.get(models.OrderPayment, payment_id)
     if not row or row.order_id != order.id or row.tenant_id != order.tenant_id:
         raise HTTPException(status_code=404, detail="Payment not found")
+    if row.payment_method == "adyen":
+        raise HTTPException(409, "Refund Adyen payments from platform payment management")
     if row.voided_at is not None:
         raise HTTPException(status_code=400, detail="Payment already voided")
     row.voided_at = datetime.now(timezone.utc)
